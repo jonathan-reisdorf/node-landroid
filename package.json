@@ -1,0 +1,20 @@
+{
+  "name": "node-landroid",
+  "version": "0.1.0",
+  "description": "Wrapper around homebridge-landroid to use in plain nodejs projects",
+  "author": "Jonathan Reisdorf",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "prepublish": "tsc"
+  },
+  "main": "index.js",
+  "types": "index.d.ts",
+  "dependencies": {
+    "homebridge-landroid": "^0.11.9"
+  },
+  "devDependencies": {
+    "@types/node": "^20.7.0",
+    "typescript": "^5.2.2"
+  }
+}
