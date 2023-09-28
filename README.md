@@ -77,7 +77,14 @@ await accessory.homeSensorState; // "contactDetected" when mower is home, "conta
 await accessory.partyMode; // true: party mode on, false: party mode off
 await accessory.fullState; // returns an object with everything at once and the string states are converted to boolean
 accessory.info; // returns info about the mower
+
+accessory.powerState = true; // start the mower
+accessory.powerState = false; // stop the mower
+accessory.partyMode = true; // enable party mode
+accessory.partyMode = false; // disable party mode
 ```
+
+There are also normal methods available for every of those getters/setters, e.g. `getPowerState()` or `setPowerState(value)` which allows to `await` also setting the values.
 
 ## Roadmap
 
