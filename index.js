@@ -23,6 +23,7 @@ var LANDROID_STATUS_LOW_BATTERY;
 })(LANDROID_STATUS_LOW_BATTERY || (exports.LANDROID_STATUS_LOW_BATTERY = LANDROID_STATUS_LOW_BATTERY = {}));
 let isReadyResolve;
 const isReady = new Promise((resolve) => (isReadyResolve = resolve));
+let landroidPlatform;
 const CharacteristicKeys = {
     On: 'on',
     BatteryLevel: 'batteryLevel',
@@ -199,9 +200,6 @@ class HomebridgeAccessory {
     getService(service) {
         return this.addOrGetService(service);
     }
-    landroidUpdate(...args) {
-        console.log('update!!!', args);
-    }
     listServices() {
         return this.services.map(({ name }) => name);
     }
@@ -322,7 +320,29 @@ const init = async (config) => {
         hap: { Service, Characteristic: CharacteristicKeys, uuid: { generate: (serial) => serial } },
         user: { storagePath: () => path_1.default.dirname(require.main.filename) },
         async registerPlatform(_, _2, LandroidPlatform) {
-            new LandroidPlatform(config.debug ? console.log : () => { }, config, new Api());
+            const NO_LOG = () => { };
+            landroidPlatform = new LandroidPlatform(config.debug ? console.log : NO_LOG, config, new Api());
+            if (config.debug) {
+                return;
+            }
+            const { connectMqtt, setState } = landroidPlatform.landroidCloud;
+            landroidPlatform.landroidCloud.connectMqtt = (...args) => {
+                landroidPlatform.landroidCloud.log.debug = null; // circumvent bug in homebridge-landroid
+                connectMqtt.bind(landroidPlatform.landroidCloud)(...args);
+                landroidPlatform.landroidCloud.log.debug = NO_LOG;
+            };
+            landroidPlatform.landroidCloud.setState = (key, valueObj, ...rest) => {
+                setState.bind(landroidPlatform.landroidCloud)(key, valueObj, ...rest);
+                const [uuid, category, ...characteristic] = key?.split('.') ?? [];
+                const value = valueObj?.val;
+                const accessory = uuid && Accessory.get({ uuid });
+                if (!accessory || !category || category === 'rawMqtt' || !characteristic.length || value === undefined) {
+                    return;
+                }
+                accessory.getService(category).getCharacteristic(characteristic.join('.')).updateValue(value);
+                console.log({ category, characteristic, value });
+            };
+            // console.log(landroidPlatform.landroidCloud);
         },
     };
     (0, homebridge_landroid_1.default)(homebridgeStub);

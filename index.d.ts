@@ -103,7 +103,6 @@ declare class HomebridgeAccessory {
     private addOrGetService;
     addService(service: typeof BaseService | string): void;
     getService(service: typeof BaseService | string): BaseService;
-    landroidUpdate(...args: any): void;
     listServices(): string[];
     listCharacteristics(): {
         [serviceName: string]: {

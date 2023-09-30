@@ -49,6 +49,8 @@ export interface LandroidInfo {
 let isReadyResolve: (value?: unknown) => void;
 const isReady = new Promise((resolve) => (isReadyResolve = resolve));
 
+let landroidPlatform: any;
+
 const CharacteristicKeys = {
   On: 'on',
   BatteryLevel: 'batteryLevel',
@@ -426,7 +428,34 @@ const init = async (config: LandroidConfig) => {
     hap: { Service, Characteristic: CharacteristicKeys, uuid: { generate: (serial: string) => serial } },
     user: { storagePath: () => fs.dirname(require.main!.filename) },
     async registerPlatform(_: unknown, _2: unknown, LandroidPlatform: any) {
-      new LandroidPlatform(config.debug ? console.log : () => {}, config, new Api());
+      const NO_LOG = () => {};
+      landroidPlatform = new LandroidPlatform(config.debug ? console.log : NO_LOG, config, new Api());
+      if (config.debug) {
+        return;
+      }
+
+      const { connectMqtt, setState } = landroidPlatform.landroidCloud;
+      landroidPlatform.landroidCloud.connectMqtt = (...args: any[]) => {
+        landroidPlatform.landroidCloud.log.debug = null; // circumvent bug in homebridge-landroid
+        connectMqtt.bind(landroidPlatform.landroidCloud)(...args);
+        landroidPlatform.landroidCloud.log.debug = NO_LOG;
+      };
+
+      landroidPlatform.landroidCloud.setState = (key: string, valueObj: { val: any }, ...rest: any) => {
+        setState.bind(landroidPlatform.landroidCloud)(key, valueObj, ...rest);
+
+        const [uuid, category, ...characteristic] = key?.split('.') ?? [];
+        const value = valueObj?.val;
+        const accessory = uuid && Accessory.get({ uuid });
+        if (!accessory || !category || category === 'rawMqtt' || !characteristic.length || value === undefined) {
+          return;
+        }
+
+        accessory.getService(category).getCharacteristic(characteristic.join('.')).updateValue(value);
+        console.log({ category, characteristic, value });
+      };
+
+      // console.log(landroidPlatform.landroidCloud);
     },
   };
 
