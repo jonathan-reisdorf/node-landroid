@@ -49,6 +49,8 @@ export interface LandroidInfo {
 let isReadyResolve: (value?: unknown) => void;
 const isReady = new Promise((resolve) => (isReadyResolve = resolve));
 
+let landroidPlatform: any;
+
 const CharacteristicKeys = {
   On: 'on',
   BatteryLevel: 'batteryLevel',
@@ -420,13 +422,231 @@ class Accessory extends HomebridgeAccessory {
   }
 }
 
+const WEEK = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+const ServiceRawMqtt = 'rawMqtt';
+const ServiceCalendar = 'calendar';
+const ServiceMower = 'mower';
+
+const ensureLength = (num: number) => '0'.repeat(Math.max(0, 2 - String(num).length)) + String(num);
+
+export interface MowCalendarAutoScheduleExclusionSlot {
+  start: string; // format hh:mm
+  end: string; // format hh:mm
+  duration: number;
+  reason: 'generic' | 'irrigation';
+}
+
+export interface MowCalendarAutoScheduleExclusion {
+  wholeDay: boolean;
+  slots: MowCalendarAutoScheduleExclusionSlot[];
+}
+
+export interface MowCalendarManualScheduleTimeSlot {
+  start: string; // format hh:mm
+  end: string; // format hh:mm
+  effectiveEnd: string; // format hh:mm; factors in the mowTimeExtendPercentage
+  duration: number; // minutes
+  effectiveDuration: number; // minutes; factors in the mowTimeExtendPercentage
+  borderCut: boolean;
+}
+
+export interface MowCalendar {
+  autoSchedule: {
+    enabled: boolean;
+    boostLevel: number;
+    exclusions: {
+      excludeNights: boolean;
+      monday: MowCalendarAutoScheduleExclusion;
+      tuesday: MowCalendarAutoScheduleExclusion;
+      wednesday: MowCalendarAutoScheduleExclusion;
+      thursday: MowCalendarAutoScheduleExclusion;
+      friday: MowCalendarAutoScheduleExclusion;
+      saturday: MowCalendarAutoScheduleExclusion;
+      sunday: MowCalendarAutoScheduleExclusion;
+    };
+  };
+  manualSchedule: {
+    enabled: boolean;
+    times: {
+      mowTimeExtendPercentage: number; // -100..100 percentage (increase/decrease)
+      monday: MowCalendarManualScheduleTimeSlot[];
+      tuesday: MowCalendarManualScheduleTimeSlot[];
+      wednesday: MowCalendarManualScheduleTimeSlot[];
+      thursday: MowCalendarManualScheduleTimeSlot[];
+      friday: MowCalendarManualScheduleTimeSlot[];
+      saturday: MowCalendarManualScheduleTimeSlot[];
+      sunday: MowCalendarManualScheduleTimeSlot[];
+    };
+  };
+}
+
+class ExtendedAccessory extends Accessory {
+  get calendar(): Promise<MowCalendar> {
+    return this.getCalendar();
+  }
+
+  async getCalendar(): Promise<MowCalendar> {
+    const raw = this.getService(ServiceRawMqtt);
+    const isAutoSchedule = !!(await raw.getCharacteristic('auto_schedule').get());
+
+    return {
+      autoSchedule: {
+        enabled: isAutoSchedule,
+        boostLevel: ((await raw.getCharacteristic('auto_schedule_settings.boost').get()) as number) ?? 0,
+        exclusions: await this.getAutoScheduleExclusions(),
+      },
+      manualSchedule: {
+        enabled: !isAutoSchedule,
+        times: await this.getManualScheduleTimes(),
+      },
+    };
+  }
+
+  private async getManualScheduleTimes() {
+    const times1 = JSON.parse((await this.getService(ServiceCalendar).getCharacteristic('calJson').get()) || '[]');
+    const times2 = JSON.parse((await this.getService(ServiceCalendar).getCharacteristic('calJson2').get()) || '[]');
+    const mowTimeExtendPercentage =
+      (await this.getService(ServiceMower).getCharacteristic('mowTimeExtend').get()) || 0;
+
+    return new Array(7).fill(null).reduce(
+      (calendar, _, weekday) => {
+        const dayName = WEEK[weekday];
+        const dayTimes = [times1[weekday], times2[weekday]]
+          .map((slot: [string, number, number]) => {
+            const [humanReadableStartTime = '00:00', duration = 0, borderCut = 0] = slot ?? [];
+            const [startHour, startMinute] = humanReadableStartTime?.split(':') ?? '00:00';
+            const start = parseInt(startHour, 10) * 60 + parseInt(startMinute, 10);
+
+            return { start, startHour, startMinute, duration, borderCut };
+          })
+          .filter(({ duration }) => duration)
+          .sort((a, b) => a.start - b.start)
+          .map(({ start, startHour, startMinute, duration, borderCut }) => {
+            const end = start + duration;
+            const endHour = Math.floor(end / 60);
+            const endMinute = end - endHour * 60;
+
+            const effectiveDuration = Math.round(duration * (1 + mowTimeExtendPercentage / 100));
+            const effectiveEnd = start + effectiveDuration;
+            const effectiveEndHour = Math.floor(effectiveEnd / 60);
+            const effectiveEndMinute = effectiveEnd - effectiveEndHour * 60;
+
+            return {
+              start: `${startHour}:${startMinute}`,
+              end: `${ensureLength(endHour)}:${ensureLength(endMinute)}`,
+              effectiveEnd: `${ensureLength(effectiveEndHour)}:${ensureLength(effectiveEndMinute)}`,
+              duration,
+              effectiveDuration,
+              borderCut: !!borderCut,
+            };
+          });
+
+        return Object.assign(calendar, { [dayName]: dayTimes });
+      },
+      {
+        mowTimeExtendPercentage,
+      }
+    );
+  }
+
+  private async getAutoScheduleExclusions() {
+    const raw = this.getService(ServiceRawMqtt);
+
+    const data = await Promise.all(
+      new Array(7).fill(null).map(async (_, weekday) => {
+        const weekdayKey = `0${weekday + 1}`;
+        const wholeDay = await raw
+          .getCharacteristic(`auto_schedule_settings.exclusion_scheduler.days${weekdayKey}.exclude_day`)
+          .get();
+
+        let slots = await Promise.all(
+          new Array(4).fill(null).map(async (_, slot) => {
+            const slotKey = `0${slot + 1}`;
+            return {
+              start: await raw
+                .getCharacteristic(
+                  `auto_schedule_settings.exclusion_scheduler.days${weekdayKey}.slots${slotKey}.start_time`
+                )
+                .get(),
+              duration: await raw
+                .getCharacteristic(
+                  `auto_schedule_settings.exclusion_scheduler.days${weekdayKey}.slots${slotKey}.duration`
+                )
+                .get(),
+              reason: await raw
+                .getCharacteristic(
+                  `auto_schedule_settings.exclusion_scheduler.days${weekdayKey}.slots${slotKey}.reason`
+                )
+                .get(),
+            };
+          })
+        );
+
+        slots = slots
+          .filter(({ duration }) => duration)
+          .sort((a, b) => a.start - b.start)
+          .map((item) => {
+            const { start, duration } = item;
+            const end = start + duration;
+            const startHour = Math.floor(start / 60);
+            const startMinute = start - startHour * 60;
+            const endHour = Math.floor(end / 60);
+            const endMinute = end - endHour * 60;
+
+            return Object.assign(item, {
+              start: `${ensureLength(startHour)}:${ensureLength(startMinute)}`,
+              end: `${ensureLength(endHour)}:${ensureLength(endMinute)}`,
+            });
+          });
+
+        return { wholeDay, slots };
+      })
+    );
+
+    return data.reduce((exclusions, dayData, weekday) => Object.assign(exclusions, { [WEEK[weekday]]: dayData }), {
+      excludeNights: !!(await raw
+        .getCharacteristic('auto_schedule_settings.exclusion_scheduler.exclude_nights')
+        .get()),
+    } as MowCalendar['autoSchedule']['exclusions']);
+  }
+}
+
 const init = async (config: LandroidConfig) => {
   const homebridgeStub = {
-    platformAccessory: Accessory,
+    platformAccessory: ExtendedAccessory,
     hap: { Service, Characteristic: CharacteristicKeys, uuid: { generate: (serial: string) => serial } },
     user: { storagePath: () => fs.dirname(require.main!.filename) },
     async registerPlatform(_: unknown, _2: unknown, LandroidPlatform: any) {
-      new LandroidPlatform(config.debug ? console.log : () => {}, config, new Api());
+      const NO_LOG = () => {};
+      landroidPlatform = new LandroidPlatform(config.debug ? console.log : NO_LOG, config, new Api());
+      if (config.debug) {
+        return;
+      }
+
+      const { connectMqtt, setState } = landroidPlatform.landroidCloud;
+      landroidPlatform.landroidCloud.connectMqtt = (...args: any[]) => {
+        landroidPlatform.landroidCloud.log.debug = null; // circumvent bug in homebridge-landroid
+        connectMqtt.bind(landroidPlatform.landroidCloud)(...args);
+        landroidPlatform.landroidCloud.log.debug = NO_LOG;
+      };
+
+      landroidPlatform.landroidCloud.setState = (
+        key: string,
+        value: { val: any } | string | number | boolean,
+        ...rest: any
+      ) => {
+        setState.bind(landroidPlatform.landroidCloud)(key, value, ...rest);
+
+        const [uuid, category, ...characteristic] = key?.split('.') ?? [];
+        value = (value as { val: any })?.val ?? value;
+        const accessory = uuid && ExtendedAccessory.get({ uuid });
+        if (!accessory || !category || !characteristic.length) {
+          return;
+        }
+
+        accessory.getService(category).getCharacteristic(characteristic.join('.')).updateValue(value);
+      };
     },
   };
 
@@ -435,7 +655,7 @@ const init = async (config: LandroidConfig) => {
   await isReady;
   await new Promise((resolve) => setTimeout(resolve, 2000));
 
-  return Accessory;
+  return ExtendedAccessory;
 };
 
 export default init;

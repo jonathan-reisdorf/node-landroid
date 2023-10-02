@@ -103,7 +103,6 @@ declare class HomebridgeAccessory {
     private addOrGetService;
     addService(service: typeof BaseService | string): void;
     getService(service: typeof BaseService | string): BaseService;
-    landroidUpdate(...args: any): void;
     listServices(): string[];
     listCharacteristics(): {
         [serviceName: string]: {
@@ -138,6 +137,59 @@ declare class Accessory extends HomebridgeAccessory {
     get info(): LandroidInfo;
     getInfo(): LandroidInfo;
 }
-declare const init: (config: LandroidConfig) => Promise<typeof Accessory>;
+export interface MowCalendarAutoScheduleExclusionSlot {
+    start: string;
+    end: string;
+    duration: number;
+    reason: 'generic' | 'irrigation';
+}
+export interface MowCalendarAutoScheduleExclusion {
+    wholeDay: boolean;
+    slots: MowCalendarAutoScheduleExclusionSlot[];
+}
+export interface MowCalendarManualScheduleTimeSlot {
+    start: string;
+    end: string;
+    effectiveEnd: string;
+    duration: number;
+    effectiveDuration: number;
+    borderCut: boolean;
+}
+export interface MowCalendar {
+    autoSchedule: {
+        enabled: boolean;
+        boostLevel: number;
+        exclusions: {
+            excludeNights: boolean;
+            monday: MowCalendarAutoScheduleExclusion;
+            tuesday: MowCalendarAutoScheduleExclusion;
+            wednesday: MowCalendarAutoScheduleExclusion;
+            thursday: MowCalendarAutoScheduleExclusion;
+            friday: MowCalendarAutoScheduleExclusion;
+            saturday: MowCalendarAutoScheduleExclusion;
+            sunday: MowCalendarAutoScheduleExclusion;
+        };
+    };
+    manualSchedule: {
+        enabled: boolean;
+        times: {
+            mowTimeExtendPercentage: number;
+            monday: MowCalendarManualScheduleTimeSlot[];
+            tuesday: MowCalendarManualScheduleTimeSlot[];
+            wednesday: MowCalendarManualScheduleTimeSlot[];
+            thursday: MowCalendarManualScheduleTimeSlot[];
+            friday: MowCalendarManualScheduleTimeSlot[];
+            saturday: MowCalendarManualScheduleTimeSlot[];
+            sunday: MowCalendarManualScheduleTimeSlot[];
+        };
+    };
+}
+declare class ExtendedAccessory extends Accessory {
+    get calendar(): Promise<MowCalendar>;
+    getCalendar(): Promise<MowCalendar>;
+    private getManualScheduleTimes;
+    private getAutoScheduleExclusions;
+}
+declare const init: (config: LandroidConfig) => Promise<typeof ExtendedAccessory>;
 export default init;
 //# sourceMappingURL=index.d.ts.map
