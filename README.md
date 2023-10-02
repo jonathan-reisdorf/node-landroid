@@ -76,6 +76,7 @@ await accessory.rainSensorState; // true: rain sensor detects water, false: no w
 await accessory.homeSensorState; // "contactDetected" when mower is home, "contactNotDetected" when mower is not home
 await accessory.partyMode; // true: party mode on, false: party mode off
 await accessory.fullState; // returns an object with everything at once and the string states are converted to boolean
+await accessory.calendar; // returns the automatic/manual mowing settings/schedule
 accessory.info; // returns info about the mower
 
 accessory.powerState = true; // start the mower
@@ -85,10 +86,11 @@ accessory.partyMode = false; // disable party mode
 ```
 
 There are also normal methods available for every of those getters/setters, e.g. `getPowerState()` or `setPowerState(value)` which allows to `await` also setting the values.
+For `accessory.calendar`, see the `MowCalendar` interface.
 
 ## Roadmap
 
-Since `homebridge-landroid` connects to Worx via MQTT, it would be nice to add MQTT support as well and offer the option to use this as standalone package as then we'd get realtime updates instead of having to poll the values.
+Since `homebridge-landroid` connects to Worx via MQTT, it would be nice to add MQTT support with change listeners as well and offer the option to use this as standalone package as then we'd get realtime updates instead of having to poll the values. Also, more setters will be added as I need them for my personal projects.
 
 ## Disclaimers
 

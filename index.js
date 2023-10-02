@@ -314,9 +314,115 @@ class Accessory extends HomebridgeAccessory {
         };
     }
 }
+const WEEK = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const ServiceRawMqtt = 'rawMqtt';
+const ServiceCalendar = 'calendar';
+const ServiceMower = 'mower';
+const ensureLength = (num) => '0'.repeat(Math.max(0, 2 - String(num).length)) + String(num);
+class ExtendedAccessory extends Accessory {
+    get calendar() {
+        return this.getCalendar();
+    }
+    async getCalendar() {
+        const raw = this.getService(ServiceRawMqtt);
+        const isAutoSchedule = !!(await raw.getCharacteristic('auto_schedule').get());
+        return {
+            autoSchedule: {
+                enabled: isAutoSchedule,
+                boostLevel: (await raw.getCharacteristic('auto_schedule_settings.boost').get()) ?? 0,
+                exclusions: await this.getAutoScheduleExclusions(),
+            },
+            manualSchedule: {
+                enabled: !isAutoSchedule,
+                times: await this.getManualScheduleTimes(),
+            },
+        };
+    }
+    async getManualScheduleTimes() {
+        const times1 = JSON.parse((await this.getService(ServiceCalendar).getCharacteristic('calJson').get()) || '[]');
+        const times2 = JSON.parse((await this.getService(ServiceCalendar).getCharacteristic('calJson2').get()) || '[]');
+        const mowTimeExtendPercentage = (await this.getService(ServiceMower).getCharacteristic('mowTimeExtend').get()) || 0;
+        return new Array(7).fill(null).reduce((calendar, _, weekday) => {
+            const dayName = WEEK[weekday];
+            const dayTimes = [times1[weekday], times2[weekday]]
+                .map((slot) => {
+                const [humanReadableStartTime = '00:00', duration = 0, borderCut = 0] = slot ?? [];
+                const [startHour, startMinute] = humanReadableStartTime?.split(':') ?? '00:00';
+                const start = parseInt(startHour, 10) * 60 + parseInt(startMinute, 10);
+                return { start, startHour, startMinute, duration, borderCut };
+            })
+                .filter(({ duration }) => duration)
+                .sort((a, b) => a.start - b.start)
+                .map(({ start, startHour, startMinute, duration, borderCut }) => {
+                const end = start + duration;
+                const endHour = Math.floor(end / 60);
+                const endMinute = end - endHour * 60;
+                const effectiveDuration = Math.round(duration * (1 + mowTimeExtendPercentage / 100));
+                const effectiveEnd = start + effectiveDuration;
+                const effectiveEndHour = Math.floor(effectiveEnd / 60);
+                const effectiveEndMinute = effectiveEnd - effectiveEndHour * 60;
+                return {
+                    start: `${startHour}:${startMinute}`,
+                    end: `${ensureLength(endHour)}:${ensureLength(endMinute)}`,
+                    effectiveEnd: `${ensureLength(effectiveEndHour)}:${ensureLength(effectiveEndMinute)}`,
+                    duration,
+                    effectiveDuration,
+                    borderCut: !!borderCut,
+                };
+            });
+            return Object.assign(calendar, { [dayName]: dayTimes });
+        }, {
+            mowTimeExtendPercentage,
+        });
+    }
+    async getAutoScheduleExclusions() {
+        const raw = this.getService(ServiceRawMqtt);
+        const data = await Promise.all(new Array(7).fill(null).map(async (_, weekday) => {
+            const weekdayKey = `0${weekday + 1}`;
+            const wholeDay = await raw
+                .getCharacteristic(`auto_schedule_settings.exclusion_scheduler.days${weekdayKey}.exclude_day`)
+                .get();
+            let slots = await Promise.all(new Array(4).fill(null).map(async (_, slot) => {
+                const slotKey = `0${slot + 1}`;
+                return {
+                    start: await raw
+                        .getCharacteristic(`auto_schedule_settings.exclusion_scheduler.days${weekdayKey}.slots${slotKey}.start_time`)
+                        .get(),
+                    duration: await raw
+                        .getCharacteristic(`auto_schedule_settings.exclusion_scheduler.days${weekdayKey}.slots${slotKey}.duration`)
+                        .get(),
+                    reason: await raw
+                        .getCharacteristic(`auto_schedule_settings.exclusion_scheduler.days${weekdayKey}.slots${slotKey}.reason`)
+                        .get(),
+                };
+            }));
+            slots = slots
+                .filter(({ duration }) => duration)
+                .sort((a, b) => a.start - b.start)
+                .map((item) => {
+                const { start, duration } = item;
+                const end = start + duration;
+                const startHour = Math.floor(start / 60);
+                const startMinute = start - startHour * 60;
+                const endHour = Math.floor(end / 60);
+                const endMinute = end - endHour * 60;
+                return Object.assign(item, {
+                    start: `${ensureLength(startHour)}:${ensureLength(startMinute)}`,
+                    end: `${ensureLength(endHour)}:${ensureLength(endMinute)}`,
+                });
+            });
+            return { wholeDay, slots };
+        }));
+        return data.reduce((exclusions, dayData, weekday) => Object.assign(exclusions, { [WEEK[weekday]]: dayData }), {
+            excludeNights: !!(await raw
+                .getCharacteristic('auto_schedule_settings.exclusion_scheduler.exclude_nights')
+                .get()),
+        });
+    }
+}
 const init = async (config) => {
     const homebridgeStub = {
-        platformAccessory: Accessory,
+        platformAccessory: ExtendedAccessory,
         hap: { Service, Characteristic: CharacteristicKeys, uuid: { generate: (serial) => serial } },
         user: { storagePath: () => path_1.default.dirname(require.main.filename) },
         async registerPlatform(_, _2, LandroidPlatform) {
@@ -331,24 +437,22 @@ const init = async (config) => {
                 connectMqtt.bind(landroidPlatform.landroidCloud)(...args);
                 landroidPlatform.landroidCloud.log.debug = NO_LOG;
             };
-            landroidPlatform.landroidCloud.setState = (key, valueObj, ...rest) => {
-                setState.bind(landroidPlatform.landroidCloud)(key, valueObj, ...rest);
+            landroidPlatform.landroidCloud.setState = (key, value, ...rest) => {
+                setState.bind(landroidPlatform.landroidCloud)(key, value, ...rest);
                 const [uuid, category, ...characteristic] = key?.split('.') ?? [];
-                const value = valueObj?.val;
-                const accessory = uuid && Accessory.get({ uuid });
-                if (!accessory || !category || category === 'rawMqtt' || !characteristic.length || value === undefined) {
+                value = value?.val ?? value;
+                const accessory = uuid && ExtendedAccessory.get({ uuid });
+                if (!accessory || !category || !characteristic.length) {
                     return;
                 }
                 accessory.getService(category).getCharacteristic(characteristic.join('.')).updateValue(value);
-                console.log({ category, characteristic, value });
             };
-            // console.log(landroidPlatform.landroidCloud);
         },
     };
     (0, homebridge_landroid_1.default)(homebridgeStub);
     await isReady;
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    return Accessory;
+    return ExtendedAccessory;
 };
 exports.default = init;
 module.exports = init;
