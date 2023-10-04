@@ -68,15 +68,20 @@ The `Accessory` instance has the following getters and setters:
 const accessory = Accessory.get();
 
 await accessory.powerState; // true: mower is running, false: mower is returning home or idle
+await accessory.statusCode; // number
+await accessory.statusDescription; // string (human-readable status)
 await accessory.batteryLevel; // percentage, number from 0 to 100
 await accessory.statusLowBattery; // "low" when battery is low, else "normal"
 await accessory.chargingState; // "charging" when charging, "notCharging" when not
-await accessory.errorSensorState; // "contactDetected" when no error, "contactNotDetected" when wire not found
+await accessory.errorSensorState; // "contactDetected" when no error, "contactNotDetected" when error
+await accessory.errorCode; // number
+await accessory.errorDescription; // string (human-readable error)
 await accessory.rainSensorState; // true: rain sensor detects water, false: no water
 await accessory.homeSensorState; // "contactDetected" when mower is home, "contactNotDetected" when mower is not home
 await accessory.partyMode; // true: party mode on, false: party mode off
 await accessory.fullState; // returns an object with everything at once and the string states are converted to boolean
 await accessory.calendar; // returns the automatic/manual mowing settings/schedule
+await accessory.manualScheduleTimes; // returns the manual mowing schedule (only)
 accessory.info; // returns info about the mower
 
 accessory.powerState = true; // start the mower
@@ -86,12 +91,54 @@ accessory.partyMode = false; // disable party mode
 ```
 
 There are also normal methods available for every of those getters/setters, e.g. `getPowerState()` or `setPowerState(value)` which allows to `await` also setting the values.
-For `accessory.calendar`, see the `MowCalendar` interface.
+For `accessory.calendar`, see the `MowCalendar` interface. For `accessory.fullState`, see the `LandroidFullState` interface.
+
+## Real-time updates
+
+For some getters (more will follow), there is also a method to listen for changes (in real-time). It may be a good idea to still also poll the values from time to time as the MQTT connection may be lost while a change happens.
+
+Example:
+
+```js
+const Accessory = await landroid(config);
+const accessory = Accessory.get();
+
+console.log('Mowing schedule:', await accessory.manualScheduleTimes);
+accessory.onManualScheduleTimesChange((times) => console.log('New mowing schedule:', times));
+
+console.log('Status:', {
+  statusCode: await accessory.statusCode,
+  statusDescription: await accessory.statusDescription,
+});
+accessory.onStatusCodeChange(async (statusCode) =>
+  console.log('Changed status:', {
+    statusCode,
+    statusDescription: await accessory.statusDescription,
+  })
+);
+
+console.log('Error state:', {
+  errorCode: await accessory.errorCode,
+  errorDescription: await accessory.errorDescription,
+});
+accessory.onErrorCodeChange(async (errorCode) =>
+  console.log('Changed error state:', {
+    errorCode,
+    errorDescription: await accessory.errorDescription,
+  })
+);
+```
+
+The return value of these `onChange` methods is a function which when called removes the listener.
 
 ## Roadmap
 
-Since `homebridge-landroid` connects to Worx via MQTT, it would be nice to add MQTT support with change listeners as well and offer the option to use this as standalone package as then we'd get realtime updates instead of having to poll the values. Also, more setters will be added as I need them for my personal projects.
+It would be nice to be able to use this as MQTT standalone package. Also, more setters will be added as I need them for my personal projects.
+
+## Why homebridge-landroid and not ioBroker.worx?
+
+`homebridge-landroid` uses code from `ioBroker.worx`, however it also adds a few small hacks and an adapter which makes it more accessible.
 
 ## Disclaimers
 
-This is a very early and MVP version to get things going. I don't know the first thing about Homebridge or the Worx APIs, so I just "reverse-engineered" `homebridge-landroid` instead. Some features may be missing or work in a different way than expected. In those cases, feel free to raise an issue or PR. :)
+This is a very early and MVP version to get things going. I don't know the first thing about Homebridge, ioBroker or the Worx APIs, so I just "reverse-engineered" `homebridge-landroid` instead. Some of the code style decisions are just inherited from this library and features may be missing or work in a different way than expected. In those cases, feel free to raise an issue or PR. :)

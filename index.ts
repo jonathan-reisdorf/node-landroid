@@ -1,5 +1,6 @@
 import fs from 'path';
 import homebridgeLandroid from 'homebridge-landroid';
+import LandroidDataset from 'homebridge-landroid/LandroidDataset';
 
 export enum LANDROID_CHARGING_STATE {
   CHARGING = 'charging',
@@ -27,6 +28,8 @@ export interface LandroidConfig {
 }
 
 export interface LandroidFullState {
+  statusCode: number;
+  statusDescription: string;
   power: boolean;
   battery: {
     level: number;
@@ -34,6 +37,8 @@ export interface LandroidFullState {
     charging: boolean;
   };
   error: boolean;
+  errorCode: number;
+  errorDescription: string;
   rain: boolean;
   home: boolean;
   party: boolean;
@@ -73,6 +78,10 @@ const CharacteristicKeys = {
   Manufacturer: 'manufacturer',
   Model: 'model',
   SerialNumber: 'serialNumber',
+  StatusCode: 'status',
+  StatusDescription: 'statusDescription',
+  ErrorCode: 'error',
+  ErrorDescription: 'errorDescription',
 } as const;
 
 type NestedCharacteristicKeyType = (typeof CharacteristicKeys)[keyof typeof CharacteristicKeys];
@@ -88,6 +97,7 @@ class Characteristic {
 
   getter?: (callback: (_: null, value: any) => void) => any;
   setter?: (value: any, callback: any) => void;
+  listeners: ((value: any) => void)[] = [];
 
   constructor(service: BaseService, name: string) {
     this.service = service;
@@ -99,7 +109,9 @@ class Characteristic {
   }
 
   updateValue(value: any) {
+    const hasChanged = value !== this.value;
     this.value = value;
+    hasChanged && this.listeners.forEach((listener) => listener(value));
   }
 
   async get() {
@@ -111,7 +123,12 @@ class Characteristic {
       return undefined;
     }
 
-    return await new Promise((resolve) => this.getter((_, value) => resolve(value)));
+    return await new Promise((resolve) =>
+      this.getter((_, value) => {
+        this.updateValue(value);
+        resolve(value);
+      })
+    );
   }
 
   async set(value: any): Promise<void> {
@@ -120,6 +137,15 @@ class Characteristic {
     }
 
     await new Promise((resolve) => this.setter(value, resolve));
+  }
+
+  addListener(handler?: (value: any) => void): () => void {
+    this.listeners.push(handler);
+    return () => this.removeListener(handler);
+  }
+
+  removeListener(handler?: (value: any) => void) {
+    this.listeners = this.listeners.filter((item) => item !== handler);
   }
 }
 
@@ -188,6 +214,7 @@ class ContactSensor extends Sensor {}
 class ErrorSensor extends Sensor {}
 class LeakSensor extends Sensor {}
 class HomeSensor extends Sensor {}
+class State extends BaseService {}
 
 const Service = {
   AccessoryInformation,
@@ -198,6 +225,7 @@ const Service = {
   LeakSensor,
   HomeSensor,
   PartySwitch,
+  State,
 } as const;
 
 class Api {
@@ -347,12 +375,52 @@ class Accessory extends HomebridgeAccessory {
     return this.getService(Service.BatteryService).getCharacteristic(CharacteristicKeys.ChargingState).get();
   }
 
+  get statusCode() {
+    return this.getStatusCode();
+  }
+
+  getStatusCode(): Promise<number> {
+    return this.getService(Service.State).getCharacteristic(CharacteristicKeys.StatusCode).get();
+  }
+
+  onStatusCodeChange = (handler: (statusCode: number) => void): (() => void) => {
+    return this.getService(Service.State).getCharacteristic(CharacteristicKeys.StatusCode).addListener(handler);
+  };
+
+  get statusDescription() {
+    return this.getStatusDescription();
+  }
+
+  getStatusDescription(): Promise<string> {
+    return this.getService(Service.State).getCharacteristic(CharacteristicKeys.StatusDescription).get();
+  }
+
   get errorSensorState(): Promise<LANDROID_CONTACT_SENSOR_STATE> {
     return this.getErrorSensorState();
   }
 
   getErrorSensorState(): Promise<LANDROID_CONTACT_SENSOR_STATE> {
     return this.getService(Service.ErrorSensor).getCharacteristic(CharacteristicKeys.ContactSensorState).get();
+  }
+
+  get errorCode() {
+    return this.getErrorCode();
+  }
+
+  getErrorCode(): Promise<number> {
+    return this.getService(Service.State).getCharacteristic(CharacteristicKeys.ErrorCode).get();
+  }
+
+  onErrorCodeChange = (handler: (errorCode: number) => void): (() => void) => {
+    return this.getService(Service.State).getCharacteristic(CharacteristicKeys.ErrorCode).addListener(handler);
+  };
+
+  get errorDescription() {
+    return this.getErrorDescription();
+  }
+
+  getErrorDescription(): Promise<string> {
+    return this.getService(Service.State).getCharacteristic(CharacteristicKeys.ErrorDescription).get();
   }
 
   get rainSensorState(): Promise<boolean> {
@@ -393,6 +461,8 @@ class Accessory extends HomebridgeAccessory {
 
   async getFullState(): Promise<LandroidFullState> {
     return {
+      statusCode: await this.statusCode,
+      statusDescription: await this.statusDescription,
       power: await this.powerState,
       battery: {
         level: await this.batteryLevel,
@@ -400,6 +470,8 @@ class Accessory extends HomebridgeAccessory {
         charging: (await this.chargingState) === LANDROID_CHARGING_STATE.CHARGING,
       },
       error: (await this.errorSensorState) === LANDROID_CONTACT_SENSOR_STATE.CONTACT_NOT_DETECTED,
+      errorCode: await this.errorCode,
+      errorDescription: await this.errorDescription,
       rain: await this.rainSensorState,
       home: (await this.homeSensorState) === LANDROID_CONTACT_SENSOR_STATE.CONTACT_DETECTED,
       party: await this.partyMode,
@@ -503,7 +575,11 @@ class ExtendedAccessory extends Accessory {
     };
   }
 
-  private async getManualScheduleTimes() {
+  get manualScheduleTimes(): Promise<MowCalendar['manualSchedule']['times']> {
+    return this.getManualScheduleTimes();
+  }
+
+  async getManualScheduleTimes(): Promise<MowCalendar['manualSchedule']['times']> {
     const times1 = JSON.parse((await this.getService(ServiceCalendar).getCharacteristic('calJson').get()) || '[]');
     const times2 = JSON.parse((await this.getService(ServiceCalendar).getCharacteristic('calJson2').get()) || '[]');
     const mowTimeExtendPercentage =
@@ -549,6 +625,25 @@ class ExtendedAccessory extends Accessory {
       }
     );
   }
+
+  onManualScheduleTimesChange = (
+    handler: (times: MowCalendar['manualSchedule']['times']) => void
+  ): (() => void) => {
+    const calendar = this.getService(ServiceCalendar);
+    const mower = this.getService(ServiceMower);
+
+    const characteristics: Characteristic[] = [
+      calendar.getCharacteristic('calJson'),
+      calendar.getCharacteristic('calJson2'),
+      mower.getCharacteristic('mowTimeExtend'),
+    ];
+
+    const removeListeners = characteristics.map((characteristic) =>
+      characteristic.addListener(async () => handler(await this.manualScheduleTimes))
+    );
+
+    return () => removeListeners.forEach((removeListener) => removeListener());
+  };
 
   private async getAutoScheduleExclusions() {
     const raw = this.getService(ServiceRawMqtt);
@@ -624,7 +719,8 @@ const init = async (config: LandroidConfig) => {
         return;
       }
 
-      const { connectMqtt, setState } = landroidPlatform.landroidCloud;
+      const { landroidUpdate, landroidCloud } = landroidPlatform;
+      const { connectMqtt, setState } = landroidCloud;
       landroidPlatform.landroidCloud.connectMqtt = (...args: any[]) => {
         landroidPlatform.landroidCloud.log.debug = null; // circumvent bug in homebridge-landroid
         connectMqtt.bind(landroidPlatform.landroidCloud)(...args);
@@ -646,6 +742,26 @@ const init = async (config: LandroidConfig) => {
         }
 
         accessory.getService(category).getCharacteristic(characteristic.join('.')).updateValue(value);
+      };
+
+      landroidPlatform.landroidUpdate = (uuid: string, item: string, data: any, mowdata: any) => {
+        landroidUpdate.bind(landroidPlatform)(uuid, item, data, mowdata);
+
+        if (item !== 'status' && item !== 'error') {
+          return;
+        }
+
+        const accessory = Accessory.get({ uuid });
+        accessory
+          ?.getService(Service.State)
+          .getCharacteristic(
+            item === 'status' ? CharacteristicKeys.StatusDescription : CharacteristicKeys.ErrorDescription
+          )
+          .updateValue(item === 'status' ? LandroidDataset.STATUS_CODES[data] : LandroidDataset.ERROR_CODES[data]);
+        accessory
+          ?.getService(Service.State)
+          .getCharacteristic(item === 'status' ? CharacteristicKeys.StatusCode : CharacteristicKeys.ErrorCode)
+          .updateValue(data);
       };
     },
   };

@@ -20,6 +20,8 @@ export interface LandroidConfig {
     pwd: string;
 }
 export interface LandroidFullState {
+    statusCode: number;
+    statusDescription: string;
     power: boolean;
     battery: {
         level: number;
@@ -27,6 +29,8 @@ export interface LandroidFullState {
         charging: boolean;
     };
     error: boolean;
+    errorCode: number;
+    errorDescription: string;
     rain: boolean;
     home: boolean;
     party: boolean;
@@ -56,6 +60,10 @@ declare const CharacteristicKeys: {
     readonly Manufacturer: "manufacturer";
     readonly Model: "model";
     readonly SerialNumber: "serialNumber";
+    readonly StatusCode: "status";
+    readonly StatusDescription: "statusDescription";
+    readonly ErrorCode: "error";
+    readonly ErrorDescription: "errorDescription";
 };
 type NestedCharacteristicKeyType = (typeof CharacteristicKeys)[keyof typeof CharacteristicKeys];
 declare class Characteristic {
@@ -64,11 +72,14 @@ declare class Characteristic {
     value?: any;
     getter?: (callback: (_: null, value: any) => void) => any;
     setter?: (value: any, callback: any) => void;
+    listeners: ((value: any) => void)[];
     constructor(service: BaseService, name: string);
     on(key: 'get' | 'set', handler: () => any): void;
     updateValue(value: any): void;
     get(): Promise<any>;
     set(value: any): Promise<void>;
+    addListener(handler?: (value: any) => void): () => void;
+    removeListener(handler?: (value: any) => void): void;
 }
 declare class BaseService {
     protected _name?: string;
@@ -122,8 +133,18 @@ declare class Accessory extends HomebridgeAccessory {
     getStatusLowBattery(): Promise<LANDROID_STATUS_LOW_BATTERY>;
     get chargingState(): Promise<LANDROID_CHARGING_STATE>;
     getChargingState(): Promise<LANDROID_CHARGING_STATE>;
+    get statusCode(): Promise<number>;
+    getStatusCode(): Promise<number>;
+    onStatusCodeChange: (handler: (statusCode: number) => void) => (() => void);
+    get statusDescription(): Promise<string>;
+    getStatusDescription(): Promise<string>;
     get errorSensorState(): Promise<LANDROID_CONTACT_SENSOR_STATE>;
     getErrorSensorState(): Promise<LANDROID_CONTACT_SENSOR_STATE>;
+    get errorCode(): Promise<number>;
+    getErrorCode(): Promise<number>;
+    onErrorCodeChange: (handler: (errorCode: number) => void) => (() => void);
+    get errorDescription(): Promise<string>;
+    getErrorDescription(): Promise<string>;
     get rainSensorState(): Promise<boolean>;
     getRainSensorState(): Promise<boolean>;
     get homeSensorState(): Promise<LANDROID_CONTACT_SENSOR_STATE>;
@@ -187,7 +208,9 @@ export interface MowCalendar {
 declare class ExtendedAccessory extends Accessory {
     get calendar(): Promise<MowCalendar>;
     getCalendar(): Promise<MowCalendar>;
-    private getManualScheduleTimes;
+    get manualScheduleTimes(): Promise<MowCalendar['manualSchedule']['times']>;
+    getManualScheduleTimes(): Promise<MowCalendar['manualSchedule']['times']>;
+    onManualScheduleTimesChange: (handler: (times: MowCalendar['manualSchedule']['times']) => void) => (() => void);
     private getAutoScheduleExclusions;
 }
 declare const init: (config: LandroidConfig) => Promise<typeof ExtendedAccessory>;
