@@ -11,11 +11,11 @@
   },
   "main": "index.js",
   "types": "index.d.ts",
-  "dependencies": {
-    "homebridge-landroid": "^0.11.9"
-  },
   "devDependencies": {
     "@types/node": "^20.7.0",
     "typescript": "^5.2.2"
+  },
+  "dependencies": {
+    "homebridge-landroid": "^0.12.3"
   }
 }
